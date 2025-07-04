@@ -16,6 +16,7 @@ import (
 	"time"
 )
 
+// Go program to set up a self-signed HTTPS server with ECDSA certificates.
 func main() {
 	setup := flag.Bool("setup", false, "Generate CA and server certificates")
 	flag.Parse()
@@ -27,7 +28,7 @@ func main() {
 		return
 	}
 
-	log.Println("Starting HTTPS server on :443...")
+	log.Println("Starting HTTPS server on :8443...")
 	// Check if certs exist before starting server
 	if _, err := os.Stat("server.crt"); os.IsNotExist(err) {
 		log.Fatalf("server.crt not found. Please run with -setup flag to generate certificates.")
@@ -40,7 +41,7 @@ func main() {
 		w.Write([]byte("Hello, HTTPS"))
 	})
 
-	if err := http.ListenAndServeTLS(":443", "server.crt", "server.key", nil); err != nil {
+	if err := http.ListenAndServeTLS(":8443", "server.crt", "server.key", nil); err != nil {
 		log.Fatalf("ListenAndServeTLS error: %v", err)
 	}
 }
@@ -137,3 +138,4 @@ func generateCerts() {
 		log.Fatalf("Failed to write server certificate to file: %v", err)
 	}
 }
+
