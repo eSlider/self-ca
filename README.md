@@ -3,7 +3,7 @@
 [![CI](https://github.com/eSlider/self-ca/actions/workflows/test.yml/badge.svg)](https://github.com/eSlider/self-ca/actions/workflows/test.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/eSlider/self-ca.svg)](https://pkg.go.dev/github.com/eSlider/self-ca)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Go](https://img.shields.io/badge/Go-1.24+-00ADD8.svg)](https://go.dev)
+[![Go](https://img.shields.io/badge/Go-1.25+-00ADD8.svg)](https://go.dev)
 
 Self-hosted web service to **generate, store, and distribute** a private Certificate Authority (CA) and leaf certificates — with **platform-specific install guides** so iOS, Android, Windows, Linux, and macOS devices trust your HTTPS endpoints.
 
