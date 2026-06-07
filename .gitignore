@@ -1,0 +1,24 @@
+# Certificate artifacts — do not commit private keys
+*.key
+*.pem
+!docs/**/*.pem
+
+# Generated certs (keep examples out of git)
+ca.crt
+server.crt
+server.csr
+
+# Build output
+/self-ca
+/dist/
+/bin/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Runtime data (future web service)
+/data/
+*.db
