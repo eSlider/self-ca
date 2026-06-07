@@ -9,3 +9,10 @@ linters:
     - unused
     - ineffassign
     - bodyclose
+
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - bodyclose
+        - errcheck

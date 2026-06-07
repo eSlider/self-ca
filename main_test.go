@@ -45,7 +45,7 @@ func TestHTTPServer(t *testing.T) {
 	}
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("Hello, HTTPS"))
+		_, _ = w.Write([]byte("Hello, HTTPS"))
 	})
 
 	server := httptest.NewUnstartedServer(handler)
