@@ -1,0 +1,9 @@
+.git
+.idea
+*.key
+*.pem
+data/
+ca.crt
+server.crt
+server.key
+server.csr

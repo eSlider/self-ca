@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>self-ca</title>
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+  <link href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/vuetify@3.7.4/dist/vuetify.min.css" rel="stylesheet">
+  <style>
+    :root { color-scheme: dark; }
+    body { margin: 0; background: #0f1419; }
+    .hero-gradient {
+      background: linear-gradient(135deg, #1a2332 0%, #0d47a1 50%, #00695c 100%);
+    }
+    .qr-box canvas { border-radius: 8px; background: #fff; padding: 8px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 0.85rem; }
+    .expiry-soon { color: #ffb74d; }
+    .expiry-expired { color: #ef5350; }
+  </style>
+</head>
+<body>
+<div id="app"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/vue@3.5.13/dist/vue.global.prod.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/vuetify@3.7.4/dist/vuetify.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.4/build/qrcode.min.js"></script>
+<script>
+const { createApp, ref, computed, watch, onMounted, nextTick } = Vue;
+
+const PLATFORMS = [
+  { id: 'ios', label: 'iOS / iPadOS', icon: 'mdi-apple', exports: ['mobileconfig'], docs: '/docs/ios/README.md' },
+  { id: 'mac', label: 'macOS', icon: 'mdi-apple', exports: ['mobileconfig'], docs: '/docs/mac/README.md' },
+  { id: 'android', label: 'Android', icon: 'mdi-android', exports: ['android'], extra: ['ca.crt'] },
+  { id: 'windows', label: 'Windows', icon: 'mdi-microsoft-windows', exports: ['windows-ps1', 'windows-bat'] },
+  { id: 'linux', label: 'Linux', icon: 'mdi-linux', exports: ['linux'] },
+];
+
+const EXPORT_LABELS = {
+  mobileconfig: 'ca.mobileconfig',
+  'windows-ps1': 'install-ca.ps1',
+  'windows-bat': 'install-ca.bat',
+  linux: 'install-ca.sh',
+  android: 'network_security_config.xml',
+  'ca.crt': 'ca.crt',
+};
+
+const GUIDES = {
+  ios: ['Download ca.mobileconfig', 'Install profile in Settings', 'Enable full trust in Certificate Trust Settings'],
+  mac: ['Download ca.mobileconfig or ca.crt', 'Open in Keychain Access', 'Set Always Trust for SSL'],
+  android: ['Download ca.crt for user store', 'Settings → Security → Install CA', 'Apps need network_security_config for dev builds'],
+  windows: ['Run install-ca.ps1 (Current User) or install-ca.bat (admin)', 'Verify cert is in Trusted Root, not Personal'],
+  linux: ['chmod +x install-ca.sh && ./install-ca.sh', 'Firefox: security.enterprise_roots.enabled=true'],
+};
+
+async function api(method, path, body) {
+  const opts = { method, headers: {} };
+  if (body) {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(body);
+  }
+  const res = await fetch(path, opts);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || res.statusText);
+  }
+  if (res.status === 204) return null;
+  return res.json();
+}
+
+function daysUntil(iso) {
+  const ms = new Date(iso) - Date.now();
+  return Math.ceil(ms / 86400000);
+}
+
+function expiryClass(iso) {
+  const d = daysUntil(iso);
+  if (d < 0) return 'expiry-expired';
+  if (d < 30) return 'expiry-soon';
+  return '';
+}
+
+function formatDate(iso) {
+  return new Date(iso).toLocaleString();
+}
+
+createApp({
+  setup() {
+    const cas = ref([]);
+    const selectedCA = ref(null);
+    const certs = ref([]);
+    const loading = ref(false);
+    const error = ref('');
+    const createOpen = ref(false);
+    const issueOpen = ref(false);
+    const tab = ref('certs');
+    const createForm = ref({ common_name: '', organization: '', country: '', valid_years: 10 });
+    const issueForm = ref({ common_name: 'localhost', dns_names: 'localhost', ip_addresses: '127.0.0.1', valid_years: 1 });
+    const qrRefs = ref({});
+
+    const baseURL = computed(() => window.location.origin);
+
+    async function loadCAs() {
+      loading.value = true;
+      error.value = '';
+      try {
+        cas.value = await api('GET', '/api/cas');
+      } catch (e) {
+        error.value = e.message;
+      } finally {
+        loading.value = false;
+      }
+    }
+
+    async function selectCA(ca) {
+      selectedCA.value = ca;
+      tab.value = 'certs';
+      try {
+        certs.value = await api('GET', `/api/cas/${ca.id}/certs`);
+      } catch (e) {
+        error.value = e.message;
+      }
+    }
+
+    async function createCA() {
+      try {
+        const created = await api('POST', '/api/cas', createForm.value);
+        createOpen.value = false;
+        await loadCAs();
+        await selectCA(created);
+      } catch (e) {
+        error.value = e.message;
+      }
+    }
+
+    async function deleteCA(ca) {
+      if (!confirm(`Delete CA "${ca.common_name}" and all leaf certs?`)) return;
+      try {
+        await api('DELETE', `/api/cas/${ca.id}`);
+        if (selectedCA.value?.id === ca.id) selectedCA.value = null;
+        await loadCAs();
+      } catch (e) {
+        error.value = e.message;
+      }
+    }
+
+    async function issueCert() {
+      const body = {
+        common_name: issueForm.value.common_name,
+        dns_names: issueForm.value.dns_names.split(',').map(s => s.trim()).filter(Boolean),
+        ip_addresses: issueForm.value.ip_addresses.split(',').map(s => s.trim()).filter(Boolean),
+        valid_years: issueForm.value.valid_years,
+      };
+      try {
+        await api('POST', `/api/cas/${selectedCA.value.id}/certs`, body);
+        issueOpen.value = false;
+        certs.value = await api('GET', `/api/cas/${selectedCA.value.id}/certs`);
+      } catch (e) {
+        error.value = e.message;
+      }
+    }
+
+    async function deleteCert(cert) {
+      if (!confirm(`Delete cert "${cert.common_name}"?`)) return;
+      try {
+        await api('DELETE', `/api/cas/${selectedCA.value.id}/certs/${cert.id}`);
+        certs.value = await api('GET', `/api/cas/${selectedCA.value.id}/certs`);
+      } catch (e) {
+        error.value = e.message;
+      }
+    }
+
+    function downloadURL(caId, kind, extra) {
+      if (kind === 'ca.crt') return `${baseURL.value}/api/cas/${caId}/download/ca.crt`;
+      return `${baseURL.value}/api/cas/${caId}/export/${kind}`;
+    }
+
+    function copyText(text) {
+      navigator.clipboard.writeText(text);
+    }
+
+    function certDownloadURL(caId, certId, file) {
+      return `${baseURL.value}/api/cas/${caId}/certs/${certId}/download/${file}`;
+    }
+
+    async function renderQR(el, url) {
+      if (!el || !window.QRCode) return;
+      el.innerHTML = '';
+      const canvas = document.createElement('canvas');
+      await QRCode.toCanvas(canvas, url, { width: 160, margin: 1 });
+      el.appendChild(canvas);
+    }
+
+    watch([selectedCA, tab], async () => {
+      if (tab.value !== 'install' || !selectedCA.value) return;
+      await nextTick();
+      for (const p of PLATFORMS) {
+        const exports = [...p.exports, ...(p.extra || [])];
+        for (const exp of exports) {
+          const key = `${p.id}-${exp}`;
+          const el = document.getElementById('qr-' + key);
+          if (el) await renderQR(el, downloadURL(selectedCA.value.id, exp));
+        }
+      }
+    });
+
+    onMounted(loadCAs);
+
+    return {
+      cas, selectedCA, certs, loading, error, createOpen, issueOpen, tab,
+      createForm, issueForm, PLATFORMS, EXPORT_LABELS, GUIDES,
+      loadCAs, selectCA, createCA, deleteCA, issueCert, deleteCert,
+      downloadURL, certDownloadURL, copyText, daysUntil, expiryClass, formatDate, baseURL,
+    };
+  },
+  template: `
+    <v-app theme="dark">
+      <v-app-bar flat class="hero-gradient" density="comfortable">
+        <v-app-bar-title class="font-weight-bold">
+          <v-icon icon="mdi-certificate" class="mr-2"></v-icon>self-ca
+        </v-app-bar-title>
+        <v-spacer></v-spacer>
+        <v-btn prepend-icon="mdi-plus" variant="tonal" @click="createOpen = true">New CA</v-btn>
+      </v-app-bar>
+
+      <v-main>
+        <v-container fluid class="pa-4">
+          <v-alert v-if="error" type="error" variant="tonal" closable @click:close="error = ''" class="mb-4">{{ error }}</v-alert>
+
+          <v-row>
+            <v-col cols="12" md="4" lg="3">
+              <v-card variant="outlined" rounded="lg">
+                <v-card-title class="text-subtitle-1">Certificate Authorities</v-card-title>
+                <v-divider></v-divider>
+                <v-list density="compact" nav>
+                  <v-list-item v-if="!cas.length && !loading" title="No CAs yet" subtitle="Create one to get started"></v-list-item>
+                  <v-list-item
+                    v-for="ca in cas" :key="ca.id"
+                    :title="ca.common_name"
+                    :subtitle="formatDate(ca.not_after)"
+                    :active="selectedCA?.id === ca.id"
+                    @click="selectCA(ca)"
+                  >
+                    <template #append>
+                      <v-chip size="x-small" :class="expiryClass(ca.not_after)">{{ daysUntil(ca.not_after) }}d</v-chip>
+                    </template>
+                  </v-list-item>
+                </v-list>
+              </v-card>
+            </v-col>
+
+            <v-col cols="12" md="8" lg="9">
+              <v-card v-if="!selectedCA" variant="outlined" rounded="lg" class="pa-8 text-center">
+                <v-icon icon="mdi-shield-key-outline" size="64" color="primary" class="mb-4"></v-icon>
+                <h2 class="text-h5 mb-2">Private CA for every device</h2>
+                <p class="text-medium-emphasis mb-4">Generate a root CA, issue leaf certificates, and distribute trust to iOS, Android, Windows, Linux, and macOS.</p>
+                <v-btn color="primary" prepend-icon="mdi-plus" @click="createOpen = true">Create your first CA</v-btn>
+              </v-card>
+
+              <template v-else>
+                <v-card variant="outlined" rounded="lg" class="mb-4">
+                  <v-card-title class="d-flex align-center">
+                    <span>{{ selectedCA.common_name }}</span>
+                    <v-spacer></v-spacer>
+                    <v-chip size="small" class="mr-2" :class="expiryClass(selectedCA.not_after)">
+                      Expires {{ formatDate(selectedCA.not_after) }}
+                    </v-chip>
+                    <v-btn icon="mdi-delete" variant="text" color="error" size="small" @click="deleteCA(selectedCA)"></v-btn>
+                  </v-card-title>
+                  <v-card-subtitle class="mono">{{ selectedCA.id }}</v-card-subtitle>
+                  <v-tabs v-model="tab" color="primary">
+                    <v-tab value="certs">Leaf certificates</v-tab>
+                    <v-tab value="install">Platform install</v-tab>
+                  </v-tabs>
+                </v-card>
+
+                <v-window v-model="tab">
+                  <v-window-item value="certs">
+                    <v-card variant="outlined" rounded="lg">
+                      <v-card-title class="d-flex">
+                        Leaf certificates
+                        <v-spacer></v-spacer>
+                        <v-btn size="small" color="primary" prepend-icon="mdi-plus" @click="issueOpen = true">Issue</v-btn>
+                      </v-card-title>
+                      <v-table density="comfortable">
+                        <thead><tr><th>Common name</th><th>SANs</th><th>Expires</th><th>Downloads</th><th></th></tr></thead>
+                        <tbody>
+                          <tr v-if="!certs.length"><td colspan="5" class="text-medium-emphasis">No leaf certs issued yet.</td></tr>
+                          <tr v-for="cert in certs" :key="cert.id">
+                            <td>{{ cert.common_name }}</td>
+                            <td class="mono">{{ (cert.dns_names || []).join(', ') }}</td>
+                            <td :class="expiryClass(cert.not_after)">{{ formatDate(cert.not_after) }}</td>
+                            <td>
+                              <v-btn v-for="f in ['cert.pem','key.pem','chain.pem']" :key="f" size="x-small" variant="text"
+                                :href="certDownloadURL(selectedCA.id, cert.id, f)"
+                                target="_blank">{{ f }}</v-btn>
+                            </td>
+                            <td><v-btn icon="mdi-delete" size="x-small" variant="text" @click="deleteCert(cert)"></v-btn></td>
+                          </tr>
+                        </tbody>
+                      </v-table>
+                    </v-card>
+                  </v-window-item>
+
+                  <v-window-item value="install">
+                    <v-row>
+                      <v-col v-for="p in PLATFORMS" :key="p.id" cols="12" md="6">
+                        <v-card variant="outlined" rounded="lg" class="h-100">
+                          <v-card-title><v-icon :icon="p.icon" class="mr-2"></v-icon>{{ p.label }}</v-card-title>
+                          <v-card-text>
+                            <v-list density="compact">
+                              <v-list-item v-for="(step, i) in GUIDES[p.id]" :key="i" :title="(i+1)+'. '+step"></v-list-item>
+                            </v-list>
+                            <div class="d-flex flex-wrap ga-2 mb-3">
+                              <template v-for="exp in [...p.exports, ...(p.extra||[])]" :key="exp">
+                                <v-btn size="small" variant="tonal" :href="downloadURL(selectedCA.id, exp)" target="_blank">
+                                  {{ EXPORT_LABELS[exp] || exp }}
+                                </v-btn>
+                                <v-btn size="small" icon="mdi-content-copy" variant="text"
+                                  @click="copyText(downloadURL(selectedCA.id, exp))"></v-btn>
+                              </template>
+                            </div>
+                            <div v-for="exp in [...p.exports, ...(p.extra||[])]" :key="'qr-'+exp" class="qr-box mb-2">
+                              <div class="text-caption mb-1">{{ EXPORT_LABELS[exp] || exp }}</div>
+                              <div :id="'qr-'+p.id+'-'+exp"></div>
+                            </div>
+                          </v-card-text>
+                        </v-card>
+                      </v-col>
+                    </v-row>
+                  </v-window-item>
+                </v-window>
+              </template>
+            </v-col>
+          </v-row>
+        </v-container>
+      </v-main>
+
+      <v-dialog v-model="createOpen" max-width="480">
+        <v-card title="Create Certificate Authority">
+          <v-card-text>
+            <v-text-field v-model="createForm.common_name" label="Common name" required></v-text-field>
+            <v-text-field v-model="createForm.organization" label="Organization"></v-text-field>
+            <v-text-field v-model="createForm.country" label="Country (2-letter)"></v-text-field>
+            <v-text-field v-model.number="createForm.valid_years" label="Valid years" type="number"></v-text-field>
+          </v-card-text>
+          <v-card-actions>
+            <v-spacer></v-spacer>
+            <v-btn @click="createOpen = false">Cancel</v-btn>
+            <v-btn color="primary" @click="createCA">Create</v-btn>
+          </v-card-actions>
+        </v-card>
+      </v-dialog>
+
+      <v-dialog v-model="issueOpen" max-width="480">
+        <v-card title="Issue leaf certificate">
+          <v-card-text>
+            <v-text-field v-model="issueForm.common_name" label="Common name"></v-text-field>
+            <v-text-field v-model="issueForm.dns_names" label="DNS names (comma-separated)"></v-text-field>
+            <v-text-field v-model="issueForm.ip_addresses" label="IP addresses (comma-separated)"></v-text-field>
+            <v-text-field v-model.number="issueForm.valid_years" label="Valid years" type="number"></v-text-field>
+          </v-card-text>
+          <v-card-actions>
+            <v-spacer></v-spacer>
+            <v-btn @click="issueOpen = false">Cancel</v-btn>
+            <v-btn color="primary" @click="issueCert">Issue</v-btn>
+          </v-card-actions>
+        </v-card>
+      </v-dialog>
+    </v-app>
+  `,
+}).use(Vuetify.createVuetify({ theme: { defaultTheme: 'dark' } })).mount('#app');
+</script>
+</body>
+</html>

@@ -380,6 +380,44 @@ func TestCert_CRUD(t *testing.T) {
 	_ = ca
 }
 
+func TestExportCA(t *testing.T) {
+	srv := newTestServer(t)
+	client := srv.Client()
+	caRecord := createTestCA(t, client, srv.URL)
+
+	tests := []struct {
+		platform string
+		contains string
+	}{
+		{"mobileconfig", "com.apple.security.root"},
+		{"windows-ps1", "Import-Certificate"},
+		{"windows-bat", "certutil"},
+		{"linux", "update-ca-certificates"},
+		{"android", "network-security-config"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.platform, func(t *testing.T) {
+			resp, err := client.Get(srv.URL + "/api/cas/" + caRecord.ID + "/export/" + tc.platform)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertStatus(t, resp, http.StatusOK)
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if !strings.Contains(string(body), tc.contains) {
+				t.Fatalf("body missing %q", tc.contains)
+			}
+		})
+	}
+
+	resp, err := client.Get(srv.URL + "/api/cas/" + caRecord.ID + "/export/unknown")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertStatus(t, resp, http.StatusBadRequest)
+}
+
 func TestCreateCA_RejectsUnknownFields(t *testing.T) {
 	srv := newTestServer(t)
 	resp := postJSON(t, srv.Client(), srv.URL+"/api/cas", `{"common_name":"X","extra":true}`)

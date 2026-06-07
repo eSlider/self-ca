@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/eSlider/self-ca/internal/ca"
+	"github.com/eSlider/self-ca/internal/export"
 	"github.com/eSlider/self-ca/internal/model"
 	"github.com/eSlider/self-ca/internal/store"
 )
@@ -38,6 +39,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /api/cas/{id}/download/{file}", h.downloadCA)
 	mux.HandleFunc("GET /api/cas/{caId}/certs/{id}/download/{file}", h.downloadCert)
+	mux.HandleFunc("GET /api/cas/{id}/export/{platform}", h.exportCA)
 }
 
 func (h *Handler) createCA(w http.ResponseWriter, r *http.Request) {
@@ -363,10 +365,68 @@ func (h *Handler) downloadCert(w http.ResponseWriter, r *http.Request) {
 }
 
 func writePEM(w http.ResponseWriter, filename, content string) {
-	w.Header().Set("Content-Type", "application/x-pem-file")
+	writeAttachment(w, filename, "application/x-pem-file", content)
+}
+
+func writeAttachment(w http.ResponseWriter, filename, contentType, content string) {
+	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(content))
+}
+
+func (h *Handler) exportCA(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	platform := r.PathValue("platform")
+
+	caRecord, err := h.store.GetCA(r.Context(), id)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+
+	input := export.CAInput{
+		CommonName: caRecord.CommonName,
+		CertPEM:    caRecord.CertPEM,
+	}
+
+	var (
+		filename    string
+		contentType string
+		body        string
+	)
+
+	switch platform {
+	case "mobileconfig":
+		body, err = export.MobileConfig(input)
+		filename = "ca.mobileconfig"
+		contentType = "application/x-apple-aspen-config"
+	case "windows-ps1":
+		body, err = export.WindowsPowerShell(input)
+		filename = "install-ca.ps1"
+		contentType = "text/plain; charset=utf-8"
+	case "windows-bat":
+		body, err = export.WindowsBatch(input)
+		filename = "install-ca.bat"
+		contentType = "application/x-bat"
+	case "linux":
+		body, err = export.LinuxInstallScript(input)
+		filename = "install-ca.sh"
+		contentType = "application/x-sh"
+	case "android":
+		body, err = export.AndroidNetworkSecurity(input)
+		filename = "network_security_config.xml"
+		contentType = "application/xml"
+	default:
+		writeError(w, http.StatusBadRequest, "supported platforms: mobileconfig, windows-ps1, windows-bat, linux, android")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeAttachment(w, filename, contentType, body)
 }
 
 func decodeJSON(r *http.Request, dst any) error {

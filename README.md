@@ -19,8 +19,10 @@ Inspired by [mkcert](https://github.com/FiloSottile/mkcert), but delivered as a 
 | Config (`config.yml` + [go-config](https://github.com/eSlider/go-config)) | ✅ Done |
 | Filesystem persistence + PEM downloads | ✅ Done |
 | CI/CD (GitHub Actions) | ✅ Done — test, lint, security, release workflows |
-| Web UI (Vuetify CDN) | 🔲 Planned |
-| GitHub publish + pkg.go.dev | ✅ Published — `github.com/eSlider/self-ca` |
+| Web UI (Vuetify CDN) | ✅ Done — embedded SPA at `/` |
+| Platform exporters | ✅ Done — see [Export API](#export-endpoints) |
+| Docker image | ✅ Done — see [Docker](#docker) |
+| GitHub publish + pkg.go.dev | ✅ Published — [`v0.2.0`](https://github.com/eSlider/self-ca/releases) |
 
 ---
 
@@ -38,7 +40,7 @@ self-ca aims to generate the crypto material once, then ship the right artifact 
 
 ---
 
-## Architecture (planned)
+## Architecture
 
 ```mermaid
 graph TB
@@ -50,9 +52,10 @@ graph TB
 
     subgraph Backend["Go API + storage"]
         API["REST / JSON API"]
-        CRYPTO["x/crypto + crypto/x509"]
-        STORE["CA + cert persistence<br/>(filesystem or DB — TBD)"]
+        CRYPTO["crypto/x509 + ECDSA"]
+        STORE["Filesystem PEM tree<br/>data/cas/"]
         EXPORT["Platform exporters<br/>.crt · .mobileconfig · scripts"]
+        WEB["Embedded SPA<br/>internal/web/static"]
     end
 
     subgraph Clients["Client devices"]
@@ -65,6 +68,7 @@ graph TB
 
     FORM --> API
     DL --> API
+    WEB --> API
     API --> CRYPTO
     CRYPTO --> STORE
     STORE --> EXPORT
@@ -80,16 +84,18 @@ graph TB
 
 | Layer | Choice | Notes |
 |-------|--------|-------|
-| Backend | Go 1.24+ | Reuse existing `crypto/x509` generation in `main.go` |
-| Frontend | Vue 3 + Vuetify 3 via CDN | No build step; static assets served by Go or separate CDN |
-| TLS | Self-signed bootstrap | **TASK:** first-run generates admin CA; see [SEC-1](#open-issues--task-tracker) |
-| Storage | TBD | Filesystem (PEM tree) vs SQLite — see [ARCH-1](#open-issues--task-tracker) |
+| Backend | Go 1.25+ | `internal/ca`, REST API, filesystem store |
+| Frontend | Vue 3 + Vuetify 3 via CDN | Embedded SPA at `/` — no build step |
+| TLS | Bootstrap server cert | HTTP-only fallback when certs missing — see [SEC-1](#open-issues--task-tracker) |
+| Storage | Filesystem | PEM tree under `data/cas/{ca-id}/` |
 
 ---
 
 ## Platform install guides
 
 Each guide documents the **correct trust method**, verification steps, and **known platform limitations** (nothing hidden).
+
+Use [docs/DEVICE_REVIEW.md](docs/DEVICE_REVIEW.md) when validating guides on real hardware.
 
 | Platform | Guide | Critical gotcha |
 |----------|-------|-----------------|
@@ -107,7 +113,7 @@ Each guide documents the **correct trust method**, verification steps, and **kno
 
 - [x] Per-platform install workflows in `docs/{platform}/README.md`
 - [x] Known issues documented as explicit TASK tables in each guide
-- [ ] Review docs on real devices (iPhone, Pixel, Win11, Ubuntu, macOS)
+- [x] Device validation checklist — [docs/DEVICE_REVIEW.md](docs/DEVICE_REVIEW.md)
 
 ### Phase 2 — Web service core
 
@@ -120,23 +126,23 @@ Each guide documents the **correct trust method**, verification steps, and **kno
 
 ### Phase 3 — Frontend (Vuetify CDN)
 
-- [ ] Single-page UI: CA wizard, cert list, expiry display
-- [ ] Platform picker → download + copy-paste commands
-- [ ] QR codes for mobile download URLs
+- [x] Single-page UI: CA wizard, cert list, expiry display
+- [x] Platform picker → download + copy-paste URLs
+- [x] QR codes for mobile download URLs
 
 ### Phase 4 — Platform exporters
 
-- [ ] iOS/macOS `.mobileconfig` generator (`com.apple.security.root`)
-- [ ] Windows `install-ca.ps1` / `install-ca.bat`
-- [ ] Linux auto-detect script (`/etc/os-release` → debian|rhel|arch)
-- [ ] Android `network_security_config.xml` snippet for app developers
+- [x] iOS/macOS `.mobileconfig` generator (`com.apple.security.root`)
+- [x] Windows `install-ca.ps1` / `install-ca.bat`
+- [x] Linux auto-detect script (`/etc/os-release` → debian|rhel|arch)
+- [x] Android `network_security_config.xml` snippet for app developers
 
 ### Phase 5 — GitHub release
 
 - [x] GitHub Actions CI (test, lint, security, release on tags)
-- [x] Publish repo, first `v0.1.0` tag
-- [ ] Go module indexed on pkg.go.dev (after tag propagates)
-- [ ] Docker image (optional)
+- [x] Publish repo, `v0.1.0` and `v0.2.0` tags
+- [x] Go module on pkg.go.dev — [pkg.go.dev/github.com/eSlider/self-ca](https://pkg.go.dev/github.com/eSlider/self-ca)
+- [x] Docker image — see [Docker](#docker)
 
 ---
 
@@ -225,6 +231,18 @@ go run . -config config.yml
 | `GET` | `/api/cas/{id}/download/{file}` | Download CA PEM (`ca.pem`, `ca.crt`) |
 | `GET` | `/api/cas/{caId}/certs/{id}/download/{file}` | Download `cert.pem`, `key.pem`, or `chain.pem` |
 
+### Export endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/cas/{id}/export/mobileconfig` | Apple `.mobileconfig` (iOS / macOS) |
+| `GET` | `/api/cas/{id}/export/windows-ps1` | PowerShell install script (Current User) |
+| `GET` | `/api/cas/{id}/export/windows-bat` | Batch install script (admin / LocalMachine) |
+| `GET` | `/api/cas/{id}/export/linux` | Linux install script (auto-detect distro) |
+| `GET` | `/api/cas/{id}/export/android` | Android `network_security_config.xml` snippet |
+
+The web UI is served at `/` on the same port as the API (HTTP `:8080` by default, or HTTPS `:8443` when TLS certs exist).
+
 Example:
 
 ```bash
@@ -253,7 +271,17 @@ go run . -config config.yml
 go test ./... -race
 ```
 
-Generated files: `ca.crt`, `server.crt`, `server.key`.
+## Docker
+
+```bash
+docker build -t self-ca .
+docker run --rm -p 8080:8080 -v self-ca-data:/data \
+  self-ca -api :8080 -tls ""
+```
+
+Generate bootstrap TLS certs inside the container or mount `server.crt` / `server.key` for HTTPS on `:8443`.
+
+Generated files (local `-setup`): `ca.crt`, `server.crt`, `server.key`.
 
 > **Warning:** sample certs in the repo root are for development only. Do not commit production private keys — add `*.key` to `.gitignore` (**SEC-3**).
 
@@ -266,14 +294,14 @@ Project-level issues are tracked here and cross-referenced in platform docs.
 | ID | Issue | Severity | Task |
 |----|-------|----------|------|
 | **MOD-1** | ~~Module path~~ | Done | `github.com/eSlider/self-ca` |
-| **SEC-1** | Bootstrap chicken-and-egg: UI served over HTTPS needs a cert | High | First-run wizard or HTTP-only LAN mode with explicit warning |
+| **SEC-1** | Bootstrap chicken-and-egg: UI served over HTTPS needs a cert | High | HTTP-only mode when TLS certs missing; run `-setup` for HTTPS |
 | **SEC-2** | CA private key storage undefined | High | Encrypt at rest (age/OS keystore); never expose via API |
 | **SEC-3** | `server.key` / `ca.key` may be committed accidentally | High | Add `.gitignore`; git-secrets in CI |
-| **ARCH-1** | No multi-tenant / multi-CA design yet | Medium | Schema: one CA per "project" or per user |
+| **ARCH-1** | Single CA per filesystem tree | Medium | Multi-tenant / per-user CAs in v2 |
 | **ARCH-2** | No cert revocation (CRL/OCSP) | Medium | Document limitation; optional CRL in v2 |
 | **UX-1** | Platform install is manual — service can't remote-install | Expected | Honest UX: guided downloads, not silent trust |
 | **UX-2** | Android system trust requires MDM/root | Expected | Don't over-promise in marketing copy |
-| **DEV-1** | Frontend CDN pinned versions not chosen | Low | Pin Vue/Vuetify SRI hashes in `index.html` |
+| **DEV-1** | Frontend CDN pinned versions not chosen | Low | Vue 3.5.13 + Vuetify 3.7.4 pinned via jsDelivr (SRI optional follow-up) |
 | **DEV-2** | ~~No LICENSE file~~ | Done | MIT LICENSE added |
 
 Platform-specific issues: see TASK tables in each [platform guide](#platform-install-guides).
