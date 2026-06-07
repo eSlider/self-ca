@@ -42,6 +42,10 @@ Generated files (local `-setup`): `ca.crt`, `server.crt`, `server.key`.
 
 > **Warning:** sample certs in the repo root are for development only. Do not commit production private keys — see **SEC-3** in [Open issues](#open-issues--task-tracker).
 
+
+<img src="assets/cert-plaform-install.png">
+Choosing platform installation method
+ 
 ---
 
 ## Platform install guides
