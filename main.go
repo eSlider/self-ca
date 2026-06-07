@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/eSlider/self-ca/internal/api"
 	"github.com/eSlider/self-ca/internal/ca"
@@ -49,8 +50,16 @@ func main() {
 		go func() {
 			mux := http.NewServeMux()
 			api.NewHandler(st).Register(mux)
+			srv := &http.Server{
+				Addr:              cfg.Server.APIAddr,
+				Handler:           mux,
+				ReadHeaderTimeout: 5 * time.Second,
+				ReadTimeout:       10 * time.Second,
+				WriteTimeout:      30 * time.Second,
+				IdleTimeout:       60 * time.Second,
+			}
 			log.Printf("Starting HTTP API on %s (data: %s)...", cfg.Server.APIAddr, dataDir)
-			if err := http.ListenAndServe(cfg.Server.APIAddr, mux); err != nil {
+			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				log.Fatalf("API server error: %v", err)
 			}
 		}()
@@ -64,11 +73,20 @@ func main() {
 		log.Fatalf("%s not found. Run with -setup to generate certificates.", cfg.Server.TLSKey)
 	}
 
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("Hello, HTTPS"))
 	})
 
-	if err := http.ListenAndServeTLS(cfg.Server.TLSAddr, cfg.Server.TLSCert, cfg.Server.TLSKey, nil); err != nil {
+	tlsSrv := &http.Server{
+		Addr:              cfg.Server.TLSAddr,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+	if err := tlsSrv.ListenAndServeTLS(cfg.Server.TLSCert, cfg.Server.TLSKey); err != nil {
 		log.Fatalf("ListenAndServeTLS error: %v", err)
 	}
 }
@@ -78,7 +96,7 @@ func generateCertsToDisk(cfg config.Config) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(cfg.Setup.Output.CACert, generatedCA.CertPEM, 0o644); err != nil {
+	if err := os.WriteFile(cfg.Setup.Output.CACert, generatedCA.CertPEM, 0o644); err != nil { // #nosec G306 -- public CA certificate
 		return err
 	}
 
@@ -86,7 +104,7 @@ func generateCertsToDisk(cfg config.Config) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(cfg.Setup.Output.ServerCert, generatedLeaf.CertPEM, 0o644); err != nil {
+	if err := os.WriteFile(cfg.Setup.Output.ServerCert, generatedLeaf.CertPEM, 0o644); err != nil { // #nosec G306 -- public server certificate
 		return err
 	}
 	if err := os.WriteFile(cfg.Setup.Output.ServerKey, generatedLeaf.KeyPEM, 0o600); err != nil {

@@ -9,6 +9,10 @@ import (
 	"github.com/eSlider/self-ca/internal/store"
 )
 
+const testCAID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+const testCertID = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+const persistCAID = "cccccccccccccccccccccccccccccccc"
+
 func sampleCA(t *testing.T, id string) model.CA {
 	t.Helper()
 	generated, err := ca.GenerateCA(ca.CAOptions{CommonName: "FS Test CA"})
@@ -31,12 +35,12 @@ func TestFilesystem_CRUD(t *testing.T) {
 	dir := t.TempDir()
 	fs := store.NewFilesystem(dir)
 
-	caRecord := sampleCA(t, "ca-1")
+	caRecord := sampleCA(t, testCAID)
 	if err := fs.CreateCA(ctx, caRecord); err != nil {
 		t.Fatalf("CreateCA: %v", err)
 	}
 
-	got, err := fs.GetCA(ctx, "ca-1")
+	got, err := fs.GetCA(ctx, testCAID)
 	if err != nil {
 		t.Fatalf("GetCA: %v", err)
 	}
@@ -44,7 +48,7 @@ func TestFilesystem_CRUD(t *testing.T) {
 		t.Fatal("GetCA must strip key")
 	}
 
-	withKey, err := fs.GetCAWithKey(ctx, "ca-1")
+	withKey, err := fs.GetCAWithKey(ctx, testCAID)
 	if err != nil {
 		t.Fatalf("GetCAWithKey: %v", err)
 	}
@@ -66,28 +70,28 @@ func TestFilesystem_CRUD(t *testing.T) {
 	_ = generated
 
 	cert := model.LeafCert{
-		ID:         "cert-1",
-		CAID:       "ca-1",
+		ID:         testCertID,
+		CAID:       testCAID,
 		CommonName: "leaf.test",
 		CertPEM:    string(leaf.CertPEM),
 		KeyPEM:     string(leaf.KeyPEM),
 	}
-	if err := fs.CreateCert(ctx, "ca-1", cert); err != nil {
+	if err := fs.CreateCert(ctx, testCAID, cert); err != nil {
 		t.Fatalf("CreateCert: %v", err)
 	}
 
-	gotCert, err := fs.GetCert(ctx, "ca-1", "cert-1")
+	gotCert, err := fs.GetCert(ctx, testCAID, testCertID)
 	if err != nil || gotCert.CertPEM == "" {
 		t.Fatalf("GetCert: %v", err)
 	}
 
-	if err := fs.DeleteCert(ctx, "ca-1", "cert-1"); err != nil {
+	if err := fs.DeleteCert(ctx, testCAID, testCertID); err != nil {
 		t.Fatalf("DeleteCert: %v", err)
 	}
-	if err := fs.DeleteCA(ctx, "ca-1"); err != nil {
+	if err := fs.DeleteCA(ctx, testCAID); err != nil {
 		t.Fatalf("DeleteCA: %v", err)
 	}
-	if _, err := fs.GetCA(ctx, "ca-1"); err == nil {
+	if _, err := fs.GetCA(ctx, testCAID); err == nil {
 		t.Fatal("expected not found after delete")
 	}
 }
@@ -97,12 +101,12 @@ func TestFilesystem_PersistsAcrossInstances(t *testing.T) {
 	dir := t.TempDir()
 
 	fs1 := store.NewFilesystem(dir)
-	if err := fs1.CreateCA(ctx, sampleCA(t, "persist-ca")); err != nil {
+	if err := fs1.CreateCA(ctx, sampleCA(t, persistCAID)); err != nil {
 		t.Fatal(err)
 	}
 
 	fs2 := store.NewFilesystem(dir)
-	got, err := fs2.GetCAWithKey(ctx, "persist-ca")
+	got, err := fs2.GetCAWithKey(ctx, persistCAID)
 	if err != nil {
 		t.Fatalf("reload: %v", err)
 	}

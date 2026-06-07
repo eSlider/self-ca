@@ -3,13 +3,17 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"sync"
 
 	"github.com/eSlider/self-ca/internal/model"
 )
+
+var idPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
 
 type Filesystem struct {
 	mu  sync.RWMutex
@@ -28,7 +32,7 @@ func (f *Filesystem) CreateCA(_ context.Context, ca model.CA) error {
 	if _, err := os.Stat(caDir); err == nil {
 		return ErrAlreadyExists
 	}
-	if err := os.MkdirAll(filepath.Join(caDir, "certs"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(caDir, "certs"), 0o750); err != nil {
 		return err
 	}
 	return f.writeCA(ca)
@@ -42,7 +46,14 @@ func (f *Filesystem) GetCA(ctx context.Context, id string) (model.CA, error) {
 	return sanitizeCA(ca), nil
 }
 
-func (f *Filesystem) GetCAWithKey(_ context.Context, id string) (model.CA, error) {
+func (f *Filesystem) GetCAWithKey(ctx context.Context, id string) (model.CA, error) {
+	if err := validateID(id); err != nil {
+		return model.CA{}, ErrNotFound
+	}
+	return f.getCAWithKeyLocked(id)
+}
+
+func (f *Filesystem) getCAWithKeyLocked(id string) (model.CA, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 
@@ -96,6 +107,9 @@ func (f *Filesystem) ListCAs(_ context.Context) ([]model.CA, error) {
 }
 
 func (f *Filesystem) UpdateCA(_ context.Context, id string, patch model.CAUpdate) (model.CA, error) {
+	if err := validateID(id); err != nil {
+		return model.CA{}, ErrNotFound
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -130,6 +144,9 @@ func (f *Filesystem) UpdateCA(_ context.Context, id string, patch model.CAUpdate
 }
 
 func (f *Filesystem) DeleteCA(_ context.Context, id string) error {
+	if err := validateID(id); err != nil {
+		return ErrNotFound
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -141,6 +158,9 @@ func (f *Filesystem) DeleteCA(_ context.Context, id string) error {
 }
 
 func (f *Filesystem) CreateCert(_ context.Context, caID string, cert model.LeafCert) error {
+	if err := validateID(caID); err != nil || validateID(cert.ID) != nil {
+		return ErrNotFound
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -152,13 +172,16 @@ func (f *Filesystem) CreateCert(_ context.Context, caID string, cert model.LeafC
 	if _, err := os.Stat(certDir); err == nil {
 		return ErrAlreadyExists
 	}
-	if err := os.MkdirAll(certDir, 0o755); err != nil {
+	if err := os.MkdirAll(certDir, 0o750); err != nil {
 		return err
 	}
 	return f.writeCert(caID, cert)
 }
 
 func (f *Filesystem) GetCert(_ context.Context, caID, id string) (model.LeafCert, error) {
+	if err := validateID(caID); err != nil || validateID(id) != nil {
+		return model.LeafCert{}, ErrNotFound
+	}
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 
@@ -185,6 +208,9 @@ func (f *Filesystem) GetCert(_ context.Context, caID, id string) (model.LeafCert
 }
 
 func (f *Filesystem) ListCerts(_ context.Context, caID string) ([]model.LeafCert, error) {
+	if err := validateID(caID); err != nil {
+		return nil, ErrNotFound
+	}
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 
@@ -213,6 +239,9 @@ func (f *Filesystem) ListCerts(_ context.Context, caID string) ([]model.LeafCert
 }
 
 func (f *Filesystem) UpdateCert(_ context.Context, caID, id string, cert model.LeafCert) error {
+	if err := validateID(caID); err != nil || validateID(id) != nil {
+		return ErrNotFound
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -224,6 +253,9 @@ func (f *Filesystem) UpdateCert(_ context.Context, caID, id string, cert model.L
 }
 
 func (f *Filesystem) DeleteCert(_ context.Context, caID, id string) error {
+	if err := validateID(caID); err != nil || validateID(id) != nil {
+		return ErrNotFound
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -246,9 +278,16 @@ func (f *Filesystem) certDir(caID, certID string) string {
 	return filepath.Join(f.caDir(caID), "certs", certID)
 }
 
+func validateID(id string) error {
+	if !idPattern.MatchString(id) {
+		return fmt.Errorf("invalid id")
+	}
+	return nil
+}
+
 func (f *Filesystem) writeCA(ca model.CA) error {
 	caDir := f.caDir(ca.ID)
-	if err := os.MkdirAll(caDir, 0o755); err != nil {
+	if err := os.MkdirAll(caDir, 0o750); err != nil {
 		return err
 	}
 	meta := ca
@@ -257,7 +296,7 @@ func (f *Filesystem) writeCA(ca model.CA) error {
 	if err := writeJSON(filepath.Join(caDir, "meta.json"), meta); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(caDir, "ca.crt"), []byte(ca.CertPEM), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(caDir, "ca.crt"), []byte(ca.CertPEM), 0o644); err != nil { // #nosec G306 -- public CA certificate
 		return err
 	}
 	return os.WriteFile(filepath.Join(caDir, "ca.key"), []byte(ca.KeyPEM), 0o600)
@@ -271,7 +310,7 @@ func (f *Filesystem) writeCert(_ string, cert model.LeafCert) error {
 	if err := writeJSON(filepath.Join(certDir, "meta.json"), meta); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(certDir, "cert.pem"), []byte(cert.CertPEM), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(certDir, "cert.pem"), []byte(cert.CertPEM), 0o644); err != nil { // #nosec G306 -- public leaf certificate
 		return err
 	}
 	return os.WriteFile(filepath.Join(certDir, "key.pem"), []byte(cert.KeyPEM), 0o600)
