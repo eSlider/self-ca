@@ -1,6 +1,6 @@
 module github.com/eSlider/self-ca
 
-go 1.24.3
+go 1.25
 
 require github.com/eslider/go-config v0.4.0
 
