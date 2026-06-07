@@ -65,7 +65,7 @@ func main() {
 	}
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("Hello, HTTPS"))
+		_, _ = w.Write([]byte("Hello, HTTPS"))
 	})
 
 	if err := http.ListenAndServeTLS(cfg.Server.TLSAddr, cfg.Server.TLSCert, cfg.Server.TLSKey, nil); err != nil {
