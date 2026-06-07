@@ -2,65 +2,76 @@ package main
 
 import (
 	"crypto/tls"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"testing"
+
+	"github.com/eSlider/self-ca/internal/config"
 )
 
 func TestHTTPServer(t *testing.T) {
-	// Generate certificates for the test
-	// We run this in a temporary directory to avoid cluttering the project root
-	tempDir, err := ioutil.TempDir("", "cert-test")
+	tempDir, err := os.MkdirTemp("", "cert-test")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
 	defer os.RemoveAll(tempDir)
 
-	// Change to temp directory to generate certs there
+	cfgPath := filepath.Join(tempDir, "config.yml")
+	cfgContent := `setup:
+  output:
+    ca_cert: ca.crt
+    server_cert: server.crt
+    server_key: server.key
+`
+	if err := os.WriteFile(cfgPath, []byte(cfgContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	originalWd, _ := os.Getwd()
-	os.Chdir(tempDir)
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatalf("Failed to chdir: %v", err)
+	}
 	defer os.Chdir(originalWd)
 
-	generateCerts()
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load config: %v", err)
+	}
+	if err := generateCertsToDisk(cfg); err != nil {
+		t.Fatalf("Failed to generate certs: %v", err)
+	}
 
-	// Create a handler for our test server
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("Hello, HTTPS"))
 	})
 
-	// Create a new test server with our handler
 	server := httptest.NewUnstartedServer(handler)
 
-	// Load the generated server certificate
 	cert, err := tls.LoadX509KeyPair("server.crt", "server.key")
 	if err != nil {
 		t.Fatalf("Failed to load server key pair: %v", err)
 	}
 
-	// Configure the test server to use TLS with our certificate
 	server.TLS = &tls.Config{Certificates: []tls.Certificate{cert}}
-	server.StartTLS() // Start the server
+	server.StartTLS()
 	defer server.Close()
 
-	// Get the client from the test server. It's pre-configured to trust the server's certificate.
 	client := server.Client()
 
-	// Make a request to the server
 	resp, err := client.Get(server.URL)
 	if err != nil {
 		t.Fatalf("Failed to make HTTPS request: %v", err)
 	}
 	defer resp.Body.Close()
 
-	// Check the response status code
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("Expected status code %d, but got %d", http.StatusOK, resp.StatusCode)
 	}
 
-	// Check the response body
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("Failed to read response body: %v", err)
 	}
@@ -68,5 +79,22 @@ func TestHTTPServer(t *testing.T) {
 	expectedBody := "Hello, HTTPS"
 	if string(body) != expectedBody {
 		t.Errorf("Expected body '%s', but got '%s'", expectedBody, string(body))
+	}
+}
+
+func TestGenerateCertsFromConfig(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := config.Default()
+	cfg.Setup.Output.CACert = filepath.Join(tempDir, "ca.crt")
+	cfg.Setup.Output.ServerCert = filepath.Join(tempDir, "server.crt")
+	cfg.Setup.Output.ServerKey = filepath.Join(tempDir, "server.key")
+
+	if err := generateCertsToDisk(cfg); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{cfg.Setup.Output.CACert, cfg.Setup.Output.ServerCert, cfg.Setup.Output.ServerKey} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("missing %s: %v", path, err)
+		}
 	}
 }

@@ -1,0 +1,31 @@
+# self-ca configuration — override with env vars (e.g. SERVER_APIADDR=:3000)
+# See: https://github.com/eSlider/go-config
+
+server:
+  api_addr: ":8080"
+  tls_addr: ":8443"
+  tls_cert: server.crt
+  tls_key: server.key
+
+data:
+  dir: ./data
+
+setup:
+  ca:
+    common_name: localhost CA
+    organization: Produktor
+    country: UA
+    province: Ukraine
+    locality: Dnepr
+    valid_years: 10
+  server:
+    common_name: localhost
+    dns_names:
+      - localhost
+    ip_addresses:
+      - 127.0.0.1
+    valid_years: 1
+  output:
+    ca_cert: ca.crt
+    server_cert: server.crt
+    server_key: server.key

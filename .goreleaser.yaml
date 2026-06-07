@@ -1,0 +1,20 @@
+version: 2
+project_name: self-ca
+builds:
+  - main: .
+    binary: self-ca
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+archives:
+  - formats:
+      - tar.gz
+      - zip
+checksum:
+  name_template: checksums.txt
+changelog:
+  use: github
