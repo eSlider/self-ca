@@ -7,33 +7,25 @@ on:
 
 permissions:
   contents: read
-  security-events: write
 
 jobs:
-  govulncheck:
-    name: Vulnerability Check
+  security:
+    name: Security
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
-          go-version: stable
+          go-version: "1.24"
+          cache-dependency-path: go.sum
 
       - name: Run govulncheck
-        uses: golang/govulncheck-action@v1
-
-  gosec:
-    name: gosec
-    runs-on: ubuntu-latest
-    continue-on-error: true
-
-    steps:
-      - uses: actions/checkout@v4
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
       - name: Run gosec
-        uses: securego/gosec@master
-        with:
-          args: ./... -severity=high -confidence=medium
+        run: |
+          go install github.com/securego/gosec/v2/cmd/gosec@latest
+          gosec ./... -severity=high -confidence=medium

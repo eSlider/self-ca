@@ -1,3 +1,5 @@
+version: "2"
+
 run:
   timeout: 5m
 
@@ -9,10 +11,9 @@ linters:
     - unused
     - ineffassign
     - bodyclose
-
-issues:
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - bodyclose
-        - errcheck
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - bodyclose
+          - errcheck
