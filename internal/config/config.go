@@ -1,6 +1,7 @@
 package config
 
 import (
+	_ "embed"
 	"os"
 
 	"github.com/eslider/go-config/env"
@@ -8,6 +9,9 @@ import (
 
 	"github.com/eSlider/self-ca/internal/ca"
 )
+
+//go:embed config.yml
+var defaultConfigYAML []byte
 
 type Config struct {
 	Server ServerConfig `mapstructure:"server"`
@@ -55,38 +59,11 @@ type OutputPaths struct {
 }
 
 func Default() Config {
-	return Config{
-		Server: ServerConfig{
-			APIAddr: ":8080",
-			TLSAddr: ":8443",
-			TLSCert: "server.crt",
-			TLSKey:  "server.key",
-		},
-		Data: DataConfig{
-			Dir: "./data",
-		},
-		Setup: SetupConfig{
-			CA: SubjectConfig{
-				CommonName:   "localhost CA",
-				Organization: "Produktor",
-				Country:      "UA",
-				Province:     "Ukraine",
-				Locality:     "Dnepr",
-				ValidYears:   10,
-			},
-			Server: LeafSubject{
-				CommonName:  "localhost",
-				DNSNames:    []string{"localhost"},
-				IPAddresses: []string{"127.0.0.1"},
-				ValidYears:  1,
-			},
-			Output: OutputPaths{
-				CACert:     "ca.crt",
-				ServerCert: "server.crt",
-				ServerKey:  "server.key",
-			},
-		},
+	var cfg Config
+	if err := yaml.New(yaml.WithBytes(defaultConfigYAML)).Unmarshal(&cfg); err != nil {
+		panic("config: invalid embedded defaults: " + err.Error())
 	}
+	return cfg
 }
 
 func Load(path string) (Config, error) {
